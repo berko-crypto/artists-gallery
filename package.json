@@ -1,0 +1,21 @@
+{
+  "name": "huddle-gallery",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.6.1",
+    "@vercel/kv": "^3.0.0",
+    "express": "^4.19.2",
+    "lucide-react": "^0.383.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.5"
+  }
+}
