@@ -1,16 +1,25 @@
-import { kv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
 
 /*
- * Backs window.storage.get/set/delete/list with Vercel KV (Upstash Redis).
+ * Backs window.storage.get/set/delete/list with Upstash Redis, connected
+ * through Vercel's Marketplace integration (Vercel's own native "KV"
+ * product was sunset in Dec 2024 — this is the current replacement).
  *
- * There's no user-account system on this site, so the "shared" flag from
- * the original artifact API doesn't map to anything meaningful server-side
- * — everything here is one global namespace, which is exactly what makes
- * curator edits visible to every visitor instead of stuck in one browser.
+ * Redis.fromEnv() reads whichever env vars the integration set —
+ * UPSTASH_REDIS_REST_URL/TOKEN for a fresh Marketplace install, or the
+ * older KV_REST_API_URL/TOKEN names as a fallback — so this works
+ * either way without extra configuration.
  *
- * All keys are prefixed so this KV database can be reused safely if you
+ * There's no user-account system on this site, so the "shared" flag
+ * from the original artifact API doesn't map to anything meaningful
+ * server-side — everything here is one global namespace, which is
+ * exactly what makes curator edits visible to every visitor instead of
+ * stuck in one browser.
+ *
+ * All keys are prefixed so this database can be reused safely if you
  * ever point another project at the same store.
  */
+const kv = Redis.fromEnv();
 const NS = "hg:";
 
 export default async function handler(req, res) {

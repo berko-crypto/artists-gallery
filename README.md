@@ -30,20 +30,30 @@ Vercel's dashboard. No CLI, no install.
 ## Connect the shared storage (do this once, right after the first deploy)
 
 The site ships with real backend code (`api/storage.js`,
-`api/upload.js`) but needs two Vercel add-ons switched on before
-curator edits become visible to everyone instead of just the browser
-that made them. Both are in the dashboard, no keys to copy by hand:
+`api/upload.js`) but needs two things connected in the dashboard
+before curator edits become visible to everyone instead of just the
+browser that made them.
 
-1. Project -> Storage tab -> Create Database -> **KV** -> Connect to
-   this project.
-2. Same tab -> Create Database -> **Blob** -> Connect to this
-   project.
-3. Deployments tab -> "..." on the latest deploy -> Redeploy, so the
-   new environment variables actually reach the running functions.
+Note: Vercel's own "KV" storage product was discontinued in late 2024.
+The Storage tab no longer has a "KV" button -- the current path is a
+Marketplace integration instead. The code already expects this.
+
+1. **Redis (config, picks, fish counts)**
+   Project -> Storage tab -> Marketplace -> search "Upstash" -> Add
+   Integration -> follow the prompts -> connect it to this project.
+   This provisions a Redis database and injects the right environment
+   variables automatically -- nothing to copy by hand.
+2. **Blob (uploaded images and avatars)**
+   Same Storage tab -> Create Database -> Blob -> Connect to this
+   project. (Blob is still a native, first-party Vercel product --
+   only KV was discontinued.)
+3. **Redeploy** once (Deployments tab -> ... -> Redeploy) so the new
+   environment variables actually reach the running functions.
 
 That's it. Open the live URL, click Curate, and start adding real
 artists and real art -- uploads now go to Vercel Blob and picks/config
-go to Vercel KV, so what you add is what everyone sees.
+go to the connected Redis database, so what you add is what everyone
+sees.
 
 ## If you ever do want to deploy from a terminal
 
@@ -68,9 +78,11 @@ and uploads won't work until you're on the real deployed URL.
 
 - **No seed data.** The artists list starts empty on purpose --
   everything gets added through the Curate panel once it's live.
-- **Storage is shared**, not per-browser, once KV + Blob are connected.
-  `api/storage.js` reads/writes KV; `public/storage-shim.js` calls it
-  over `fetch` using the same `get/set/delete/list` shape the
-  component was already written against.
+- **Storage is shared**, not per-browser, once Redis + Blob are
+  connected. `api/storage.js` talks to Redis via `@upstash/redis`
+  (Vercel's own KV product was sunset, this is the current
+  replacement); `public/storage-shim.js` calls it over `fetch` using
+  the same `get/set/delete/list` shape the component was already
+  written against.
 - **Uploads go to Vercel Blob**, not a base64 string embedded in the
   config. `api/upload.js` returns a real hosted URL.
