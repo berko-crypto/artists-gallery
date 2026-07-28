@@ -1,4 +1,5 @@
 import { Redis } from "@upstash/redis";
+import { checkAdmin, rejectUnauthorized } from "./_auth.js";
 
 /*
  * Backs window.storage.get/set/delete/list with Upstash Redis, connected
@@ -44,6 +45,10 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "POST") {
+      // Writes are admin-only. Reads above are intentionally public.
+      const auth = checkAdmin(req);
+      if (!auth.ok) return rejectUnauthorized(res, auth);
+
       const { op, key, value } = req.body || {};
       if (!key) return res.status(400).json({ error: "key is required" });
 

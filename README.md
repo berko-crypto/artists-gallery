@@ -1,88 +1,91 @@
 # Huddle Gallery
 
-A community art showcase, backed by a shared database instead of each
-visitor's own browser. Starts empty -- add artists and art through the
-Curate panel once it's live.
+A community art showcase. Public to browse, locked to edit. Starts
+empty -- add artists and art through the Curate panel once it's live.
 
 ## Deploy without touching a terminal
 
-Everything below happens in a browser: GitHub's upload page and
-Vercel's dashboard. No CLI, no install.
-
 **1. Get the code onto GitHub**
-1. Unzip this file on your computer -- just to get a folder, no
-   commands needed (double-click it, or your OS's "Extract All").
-2. Go to github.com -> New repository. Name it, leave everything
-   else default, click Create.
-3. On the empty repo's page, click "uploading an existing file."
-4. Drag the *contents* of the unzipped folder in (src, public, api,
-   README.md, package.json, vercel.json, build.mjs, server.js,
-   railway.json, .gitignore -- everything except node_modules, which
-   doesn't exist yet anyway). Commit.
+1. Unzip this file on your computer (double-click / "Extract All").
+2. github.com -> New repository -> name it -> Create.
+3. On the empty repo page, click "uploading an existing file."
+4. Drag the *contents* of the unzipped folder in. Commit.
 
-**2. Import it into Vercel**
+**2. Import into Vercel**
 1. vercel.com -> log in with GitHub -> Add New -> Project.
-2. Pick the repo you just created -> Import.
-3. Vercel reads `vercel.json` on its own (build command, output
-   folder). Don't change anything. Click Deploy.
-4. A minute or two later you have a live `*.vercel.app` URL.
+2. Pick the repo -> Import. Vercel reads `vercel.json` on its own.
+3. Deploy.
 
-## Connect the shared storage (do this once, right after the first deploy)
+## Then set these three things up (once)
 
-The site ships with real backend code (`api/storage.js`,
-`api/upload.js`) but needs two things connected in the dashboard
-before curator edits become visible to everyone instead of just the
-browser that made them.
+### a. Redis -- stores config, picks, fish counts
 
-Note: Vercel's own "KV" storage product was discontinued in late 2024.
-The Storage tab no longer has a "KV" button -- the current path is a
-Marketplace integration instead. The code already expects this.
+Project -> Storage -> Marketplace -> **Upstash for Redis** -> Add
+Integration -> connect it to this project.
 
-1. **Redis (config, picks, fish counts)**
-   Project -> Storage tab -> Marketplace -> search "Upstash" -> Add
-   Integration -> follow the prompts -> connect it to this project.
-   This provisions a Redis database and injects the right environment
-   variables automatically -- nothing to copy by hand.
-2. **Blob (uploaded images and avatars)**
-   Same Storage tab -> Create Database -> Blob -> Connect to this
-   project. (Blob is still a native, first-party Vercel product --
-   only KV was discontinued.)
-3. **Redeploy** once (Deployments tab -> ... -> Redeploy) so the new
-   environment variables actually reach the running functions.
+Pick "Upstash for Redis" specifically, not the "Redis / Official Redis
+for Vercel" listing -- the code uses `@upstash/redis`, which talks over
+Upstash's REST API and expects Upstash's environment variables.
+(Vercel's own native "KV" product was discontinued in Dec 2024, which
+is why there's no KV button.)
 
-That's it. Open the live URL, click Curate, and start adding real
-artists and real art -- uploads now go to Vercel Blob and picks/config
-go to the connected Redis database, so what you add is what everyone
-sees.
+### b. Blob -- stores uploaded artwork and avatars
 
-## If you ever do want to deploy from a terminal
+Same Storage tab -> Create Database -> **Blob** -> connect to project.
+Blob is still a first-party Vercel product; only KV went away.
 
-    npm install -g vercel
-    cd huddle-gallery
-    vercel
+### c. ADMIN_TOKEN -- the thing that makes editing private
 
-Only needed if you want faster iteration later (redeploys in seconds
-without a GitHub round-trip). Not required for the steps above.
+Without this, nobody can save anything (writes fail closed on purpose,
+rather than defaulting to wide open).
 
-## Local dev (optional, only if you want to preview changes yourself)
+1. Generate a long random string. Any password generator works. Make it
+   40-ish characters of letters and numbers -- e.g.
+   `0UnGzpjYpMQ1W5LgHft93KzxQe7iUWAmd8c80BGh` (don't use that one, make
+   your own). Avoid a memorable word: the check has no rate limiting
+   behind it, so length is what protects you.
+2. Project -> Settings -> Environment Variables -> Add.
+   Name: `ADMIN_TOKEN`   Value: your string.
+   Leave it applied to all environments.
+3. Save.
+
+### Finally: redeploy
+
+Deployments tab -> "..." on the latest -> Redeploy. Connecting
+integrations and adding env vars does NOT restart what's already
+running, so this step is required for any of the above to take effect.
+
+## How the permissions actually work
+
+- **Anyone** can load the page, see the art, and toss fish.
+- **Only someone with the token** can open the Curate panel and change
+  anything, or upload files.
+- The gate is enforced **server-side**, in `api/`. Hiding the Curate
+  button alone would be meaningless -- anyone could call the API
+  directly from browser devtools. So every write endpoint checks the
+  token before doing anything.
+- The token is compared with `timingSafeEqual`, not `===`, so it can't
+  be guessed a character at a time by timing the responses.
+- Your token is held in `sessionStorage` -- it survives a refresh while
+  you're curating, and dies when you close the tab. There's a sign-out
+  button in the panel header too.
+- Fish counts are the one public write. That endpoint can *only*
+  increment a counter by one: it can't set a value, and ids are
+  pattern-validated so nobody can craft one that reaches other data.
+  Increments are atomic, so simultaneous tosses don't overwrite each
+  other.
+
+Not covered: rate limiting. Someone determined could script thousands
+of fish. Worth adding if it ever actually happens; the blast radius is
+a wrong number next to a fish icon.
+
+## Local dev
 
     npm install
-    npm run build   # bundles src/ into dist/
-    npm start       # serves dist/ on :3000 via Express
+    npm run build
+    npm start       # :3000
 
-Locally, `/api/*` isn't wired up (that's Vercel-only routing), so
-`public/storage-shim.js` falls back to `localStorage` automatically,
-and uploads won't work until you're on the real deployed URL.
-
-## What's in here right now
-
-- **No seed data.** The artists list starts empty on purpose --
-  everything gets added through the Curate panel once it's live.
-- **Storage is shared**, not per-browser, once Redis + Blob are
-  connected. `api/storage.js` talks to Redis via `@upstash/redis`
-  (Vercel's own KV product was sunset, this is the current
-  replacement); `public/storage-shim.js` calls it over `fetch` using
-  the same `get/set/delete/list` shape the component was already
-  written against.
-- **Uploads go to Vercel Blob**, not a base64 string embedded in the
-  config. `api/upload.js` returns a real hosted URL.
+`/api/*` doesn't exist under plain Express, so the storage layer falls
+back to `localStorage` and uploads won't work. The Curate panel will
+accept any token locally, since there's no server to check against and
+nothing shared to protect. Test real auth against the deployed URL.

@@ -1,4 +1,5 @@
 import { put } from "@vercel/blob";
+import { checkAdmin, rejectUnauthorized } from "./_auth.js";
 
 /*
  * Accepts a raw image body (the browser already resized it before
@@ -27,6 +28,10 @@ export default async function handler(req, res) {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "method not allowed" });
   }
+
+  // Uploading is admin-only — otherwise anyone could fill the Blob store.
+  const auth = checkAdmin(req);
+  if (!auth.ok) return rejectUnauthorized(res, auth);
 
   try {
     const buffer = await readBody(req);

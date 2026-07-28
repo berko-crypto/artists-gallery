@@ -11,6 +11,24 @@
 (function () {
   const LOCAL_PREFIX = "huddle-gallery::";
 
+  // Held in memory only. Never written to localStorage, so it can't be
+  // lifted off a shared machine after the fact.
+  let adminToken = null;
+
+  function authHeaders() {
+    return adminToken ? { "x-admin-token": adminToken } : {};
+  }
+
+  // Thrown on 401/403 so callers can tell "you're not allowed" apart
+  // from "the network is down". The difference matters: falling back to
+  // localStorage on a rejected write would make a refused save look
+  // like it succeeded until the next page load revealed otherwise.
+  function authError(msg) {
+    const e = new Error(msg || "not authorized");
+    e.isAuthError = true;
+    return e;
+  }
+
   function lk(key, shared) {
     return LOCAL_PREFIX + (shared ? "shared::" : "local::") + key;
   }
@@ -61,33 +79,72 @@
     },
 
     async set(key, value, shared = false) {
+      let denied = null;
       try {
         const r = await fetch("/api/storage", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders() },
           body: JSON.stringify({ op: "set", key, value }),
         });
-        if (!r.ok) throw new Error("storage request failed");
-        const data = await r.json();
-        return { key, value: asStringValue(data.value), shared };
+        if (r.status === 401 || r.status === 403 || r.status === 503) {
+          const body = await r.json().catch(() => ({}));
+          denied = authError(body.hint || body.error);
+        } else if (!r.ok) {
+          throw new Error("storage request failed");
+        } else {
+          const data = await r.json();
+          return { key, value: asStringValue(data.value), shared };
+        }
       } catch (e) {
+        if (e.isAuthError) throw e;
         return localSet(key, value, shared);
       }
+      if (denied) throw denied;
     },
 
     async delete(key, shared = false) {
+      let denied = null;
       try {
         const r = await fetch("/api/storage", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders() },
           body: JSON.stringify({ op: "delete", key }),
         });
-        if (!r.ok) throw new Error("storage request failed");
-        const data = await r.json();
-        return { key, deleted: !!data.deleted, shared };
+        if (r.status === 401 || r.status === 403 || r.status === 503) {
+          const body = await r.json().catch(() => ({}));
+          denied = authError(body.hint || body.error);
+        } else if (!r.ok) {
+          throw new Error("storage request failed");
+        } else {
+          const data = await r.json();
+          return { key, deleted: !!data.deleted, shared };
+        }
       } catch (e) {
+        if (e.isAuthError) throw e;
         return localDelete(key, shared);
       }
+      if (denied) throw denied;
+    },
+
+    // Called by the Curate panel once a token has been entered.
+    setAdminToken(token) {
+      adminToken = token || null;
+    },
+
+    hasAdminToken() {
+      return !!adminToken;
+    },
+
+    // Checks a token against the server before trusting it, so a typo
+    // surfaces immediately instead of at the first failed save.
+    async verifyAdminToken(token) {
+      const r = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "x-admin-token": token },
+      });
+      if (r.ok) return { ok: true };
+      const body = await r.json().catch(() => ({}));
+      return { ok: false, error: body.hint || body.error || "That token wasn't accepted." };
     },
 
     async list(prefix = "", shared = false) {

@@ -3,7 +3,7 @@ import {
   Settings2, X, Plus, Trash2, CopyPlus, ArrowUp, ArrowDown, Star,
   RotateCcw, ChevronDown, ChevronLeft, ChevronRight, Check, Shuffle,
   Maximize2, Palette, Sun, Moon, Fish, Dices, CircleUser, Square,
-  Download, Upload, ClipboardCopy
+  Download, Upload, ClipboardCopy, Lock, LogOut
 } from "lucide-react";
 
 /* ================================================================== */
@@ -505,6 +505,14 @@ export default function HuddleGallery() {
   const [images, setImages] = useState({});
   const [avatars, setAvatars] = useState({});
   const [expanded, setExpanded] = useState(null);
+  /* Admin session. Kept in sessionStorage rather than localStorage so it
+     dies when the tab closes instead of lingering on a shared machine. */
+  const [adminToken, setAdminToken] = useState(() => {
+    try { return window.sessionStorage.getItem("hg:admin") || ""; } catch (e) { return ""; }
+  });
+  const [tokenInput, setTokenInput] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
   const [importText, setImportText] = useState("");
   const [withImages, setWithImages] = useState(false);
   const [tx, setTx] = useState(0);
@@ -543,18 +551,32 @@ export default function HuddleGallery() {
 
   useEffect(() => {
     if (!ready) return;
+    // Visitors can't save. Without this the page would fire a doomed
+    // write on every load and swallow the 401.
+    if (!adminToken) return;
     const t = setTimeout(() => {
-      try { window.storage.set(STORE_KEY, JSON.stringify(cfg), false); } catch (e) {}
+      window.storage.set(STORE_KEY, JSON.stringify(cfg), false).catch((e) => {
+        if (e && e.isAuthError) say(e.message || "That change wasn't saved — admin token rejected.", 4000);
+      });
     }, 400);
     return () => clearTimeout(t);
-  }, [cfg, ready]);
+  }, [cfg, ready, adminToken]);
 
   useEffect(() => {
     (async () => {
       try {
-        const r = await window.storage.get(FISH_KEY, false);
-        if (r && r.value) setFish(JSON.parse(r.value));
-      } catch (e) { /* nobody has tossed a fish yet */ }
+        const r = await fetch("/api/fish");
+        if (r.ok) {
+          const data = await r.json();
+          setFish(data.fish || {});
+        } else throw new Error("no fish endpoint");
+      } catch (e) {
+        // Local dev with no /api routes — fall back to this browser only.
+        try {
+          const raw = window.localStorage.getItem(FISH_KEY);
+          if (raw) setFish(JSON.parse(raw));
+        } catch (e2) { /* nobody has tossed a fish yet */ }
+      }
       try {
         const r = await window.storage.get(IMG_KEY, false);
         if (r && r.value) setImages(JSON.parse(r.value));
@@ -569,6 +591,49 @@ export default function HuddleGallery() {
   const say = (msg, ms = 2600) => {
     setToast(msg);
     setTimeout(() => setToast(null), ms);
+  };
+
+  /* Hand any restored token to the storage layer before the autosave
+     effect has a chance to fire, or the first write would 401. */
+  useEffect(() => {
+    if (window.storage && window.storage.setAdminToken) {
+      window.storage.setAdminToken(adminToken);
+    }
+  }, [adminToken]);
+
+  const unlock = async () => {
+    const token = tokenInput.trim();
+    if (!token) return;
+    setAuthBusy(true);
+    setAuthError("");
+    try {
+      const result = await window.storage.verifyAdminToken(token);
+      if (result.ok) {
+        setAdminToken(token);
+        try { window.sessionStorage.setItem("hg:admin", token); } catch (e) {}
+        setTokenInput("");
+      } else {
+        setAuthError(result.error);
+      }
+    } catch (e) {
+      // No /api routes at all — local dev. Let editing through, since
+      // nothing can be saved to a shared backend from here anyway.
+      setAdminToken(token);
+      try { window.sessionStorage.setItem("hg:admin", token); } catch (e2) {}
+      setTokenInput("");
+      say("No server to check against — local preview only.");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const lock = () => {
+    setAdminToken("");
+    setTokenInput("");
+    setAuthError("");
+    try { window.sessionStorage.removeItem("hg:admin"); } catch (e) {}
+    if (window.storage && window.storage.setAdminToken) window.storage.setAdminToken("");
+    setAdminOpen(false);
   };
 
   const uploadImage = async (pieceId, file) => {
@@ -660,14 +725,32 @@ export default function HuddleGallery() {
       ),
     }));
 
-  const tossFish = (id, e) => {
-    const next = { ...fish, [id]: (fish[id] || 0) + 1 };
-    setFish(next);
-    try { window.storage.set(FISH_KEY, JSON.stringify(next), false); } catch (err) {}
+  const tossFish = async (id, e) => {
+    // Animate immediately — the fish shouldn't wait on a round trip.
     const rect = e.currentTarget.getBoundingClientRect();
     const pid = uid();
     setPops((p) => [...p, { id: pid, x: rect.left + rect.width / 2, y: rect.top }]);
     setTimeout(() => setPops((p) => p.filter((q) => q.id !== pid)), 950);
+
+    // Optimistic bump, then correct it with the server's real count so
+    // two people tossing at once don't overwrite each other.
+    setFish((f) => ({ ...f, [id]: (f[id] || 0) + 1 }));
+    try {
+      const r = await fetch("/api/fish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!r.ok) throw new Error("no fish endpoint");
+      const data = await r.json();
+      setFish((f) => ({ ...f, [id]: data.count }));
+    } catch (err) {
+      // Local dev fallback: keep the count in this browser only.
+      setFish((f) => {
+        try { window.localStorage.setItem(FISH_KEY, JSON.stringify(f)); } catch (e2) {}
+        return f;
+      });
+    }
   };
 
   const bumpLogo = () => {
@@ -1487,13 +1570,53 @@ export default function HuddleGallery() {
         <div className="hg-admin-top">
           <div>
             <p className="hg-admin-kicker">Curator</p>
-            <p className="hg-admin-title">Everything on this page</p>
+            <p className="hg-admin-title">
+              {adminToken ? "Everything on this page" : "Locked"}
+            </p>
           </div>
-          <button type="button" className="hg-icon-btn" onClick={() => setAdminOpen(false)} aria-label="Close curator panel">
-            <X size={16} />
-          </button>
+          <div className="hg-admin-top-actions">
+            {adminToken && (
+              <button type="button" className="hg-icon-btn" onClick={lock} title="Sign out" aria-label="Sign out">
+                <LogOut size={15} />
+              </button>
+            )}
+            <button type="button" className="hg-icon-btn" onClick={() => setAdminOpen(false)} aria-label="Close curator panel">
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
+        {!adminToken && (
+          <div className="hg-gate">
+            <Lock size={26} strokeWidth={2.5} />
+            <p className="hg-gate-title">Curators only</p>
+            <p className="hg-gate-body">
+              Anyone can browse the gallery. Changing it needs the admin token.
+            </p>
+            <input
+              className="hg-input"
+              type="password"
+              value={tokenInput}
+              autoComplete="current-password"
+              placeholder="Admin token"
+              onChange={(e) => { setTokenInput(e.target.value); setAuthError(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter") unlock(); }}
+            />
+            {authError && <p className="hg-gate-error">{authError}</p>}
+            <button
+              type="button"
+              className="hg-add"
+              style={{ margin: "12px 0 0", opacity: tokenInput.trim() && !authBusy ? 1 : 0.5 }}
+              disabled={!tokenInput.trim() || authBusy}
+              onClick={unlock}
+            >
+              {authBusy ? "Checking…" : "Unlock"}
+            </button>
+          </div>
+        )}
+
+        {adminToken && (
+        <>
         <div className="hg-tabs">
           {["picks", "content", "look", "layout", "artists"].map((k) => (
             <button key={k} type="button" className={`hg-tab ${tab === k ? "is-active" : ""}`} onClick={() => setTab(k)}>
@@ -1729,9 +1852,16 @@ export default function HuddleGallery() {
                 type="button"
                 className="hg-danger"
                 style={{ marginBottom: 10 }}
-                onClick={() => {
+                onClick={async () => {
                   setFish({});
-                  try { window.storage.set(FISH_KEY, "{}", false); } catch (e) {}
+                  try {
+                    await fetch("/api/fish", {
+                      method: "DELETE",
+                      headers: adminToken ? { "x-admin-token": adminToken } : {},
+                    });
+                  } catch (e) {
+                    try { window.localStorage.setItem(FISH_KEY, "{}"); } catch (e2) {}
+                  }
                 }}
               >
                 <Fish size={13} /> Clear all fish counts
@@ -2024,6 +2154,8 @@ export default function HuddleGallery() {
             </>
           )}
         </div>
+        </>
+        )}
       </aside>
 
       {!adminOpen && (
@@ -2719,6 +2851,19 @@ const CSS = `
 .hg-json {
   font-family: ui-monospace, monospace; font-size: 10.5px; line-height: 1.4;
   white-space: pre; overflow-x: auto; margin-bottom: 6px;
+}
+
+/* admin unlock gate */
+.hg-admin-top-actions { display: flex; gap: 6px; flex: none; }
+.hg-gate { padding: 26px 20px 20px; color: rgba(234,244,255,0.9); }
+.hg-gate > svg { color: var(--sun); margin-bottom: 14px; }
+.hg-gate-title { margin: 0 0 6px; font-size: 17px; font-weight: 900; }
+.hg-gate-body {
+  margin: 0 0 16px; font-size: 13px; line-height: 1.5;
+  color: rgba(234,244,255,0.6);
+}
+.hg-gate-error {
+  margin: 8px 0 0; font-size: 12px; font-weight: 700; color: #FF9DBB;
 }
 
 /* responsive */
